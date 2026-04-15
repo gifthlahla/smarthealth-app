@@ -1,0 +1,39 @@
+cat > .gitignore << 'EOF'
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub/
+build/
+flutter_*.png
+*.lock
+
+# Android / iOS generated
+android/
+ios/
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# Environment files with secrets
+.env
+*.env
+*.key
+
+# macOS
+.DS_Store
+
+# VS Code / IntelliJ
+.vscode/
+*.code-workspace
+
+# Test reports
+coverage/
+*.junit.xml
+
+# Temporary files
+*.log
+*.tmp
+EOF
