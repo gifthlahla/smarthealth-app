@@ -39,5 +39,5 @@ SmartHealth allows users to create an account, submit medical claims with suppor
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/YOUR_USERNAME/smarthealth-app.git
+   git clone https://github.com/gifthlahla/smarthealth-app.git
    cd smarthealth-app
