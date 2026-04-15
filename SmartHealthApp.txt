@@ -1,0 +1,1406 @@
+# SmartHealth Development Documentation
+
+## Project Overview
+**SmartHealth** is a mobile medical aid claims management system built with Flutter and Supabase. The app allows users to create accounts, submit medical claims with supporting documents, and track claim statuses in real-time.
+
+---
+
+## 1. Supabase Backend Configuration
+
+### Connection Credentials
+```dart
+Supabase URL: https://kmzmqdebniekrvqxoqea.supabase.co
+Publishable Key: sb_publishable_DPVgHloq1aJBSIrgLsvCog_bN6iqF0i
+```
+
+### Database Schema
+
+#### Profiles Table
+```sql
+CREATE TABLE public.profiles (
+  id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  full_name TEXT,
+  membership_number TEXT UNIQUE,
+  avatar_url TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+#### Claims Table
+```sql
+CREATE TABLE public.claims (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE NOT NULL,
+  claim_type TEXT CHECK (claim_type IN ('GP Visit', 'Specialist', 'Medicine', 'Pathology', 'Hospital', 'Dental')),
+  amount DECIMAL(10,2),
+  service_date DATE,
+  description TEXT,
+  status TEXT DEFAULT 'Pending' CHECK (status IN ('Pending', 'Under Review', 'Approved', 'Rejected', 'Paid')),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+#### Claim Documents Table
+```sql
+CREATE TABLE public.claim_documents (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  claim_id UUID REFERENCES public.claims(id) ON DELETE CASCADE NOT NULL,
+  file_name TEXT NOT NULL,
+  file_path TEXT NOT NULL,
+  file_type TEXT,
+  uploaded_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+### Storage Bucket
+- **Bucket Name**: `claim-documents`
+- **Folder Structure**:
+  - `/receipts` - For medical receipts
+  - `/reports` - For medical reports and doctor's notes
+- **Public Access**: `false` (Private bucket)
+
+### Row Level Security (RLS) Policies
+
+**Profiles Table:**
+```sql
+-- Users can view only their own profile
+CREATE POLICY "Users can view own profile" ON public.profiles 
+  FOR SELECT USING (auth.uid() = id);
+
+-- Users can update only their own profile
+CREATE POLICY "Users can update own profile" ON public.profiles 
+  FOR UPDATE USING (auth.uid() = id);
+```
+
+**Claims Table:**
+```sql
+-- Full CRUD access only to user's own claims
+CREATE POLICY "Users can view own claims" ON public.claims 
+  FOR SELECT USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can insert own claims" ON public.claims 
+  FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+CREATE POLICY "Users can update own claims" ON public.claims 
+  FOR UPDATE USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can delete own claims" ON public.claims 
+  FOR DELETE USING (auth.uid() = user_id);
+```
+
+**Storage Policies (claim-documents bucket):**
+```sql
+-- Allow authenticated users to read/write their own documents
+CREATE POLICY "Users can access own claim documents" ON storage.objects
+  FOR ALL USING (auth.role() = 'authenticated')
+  WITH CHECK (auth.role() = 'authenticated');
+```
+
+### Auto-Profile Creation Trigger
+```sql
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER AS $$
+BEGIN
+  INSERT INTO public.profiles (id, full_name, avatar_url)
+  VALUES (NEW.id, NEW.raw_user_meta_data->>'full_name', NEW.raw_user_meta_data->>'avatar_url');
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+```
+
+---
+
+## 2. Flutter Project Setup
+
+### Dependencies (`pubspec.yaml`)
+```yaml
+dependencies:
+  flutter:
+    sdk: flutter
+  supabase_flutter: ^2.8.4
+  go_router: ^14.8.1
+  flutter_riverpod: ^2.6.1
+  image_picker: ^1.1.2
+  file_picker: ^9.2.3
+  intl: ^0.20.2
+  cached_network_image: ^3.4.1
+  shimmer: ^3.0.0
+  flutter_dotenv: ^5.2.1
+  uuid: ^4.5.1
+```
+
+### Supabase Initialization (`lib/main.dart`)
+```dart
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:smarthealth/app/app.dart';
+import 'package:smarthealth/core/router/app_router.dart';
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  
+  await Supabase.initialize(
+    url: 'https://kmzmqdebniekrvqxoqea.supabase.co',
+    anonKey: 'sb_publishable_DPVgHloq1aJBSIrgLsvCog_bN6iqF0i',
+  );
+  
+  runApp(
+    const ProviderScope(
+      child: SmartHealthApp(),
+    ),
+  );
+}
+
+class SmartHealthApp extends ConsumerWidget {
+  const SmartHealthApp({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final router = ref.watch(appRouterProvider);
+    final supabase = Supabase.instance.client;
+    
+    return MaterialApp.router(
+      title: 'SmartHealth',
+      theme: AppTheme.lightTheme,
+      darkTheme: AppTheme.darkTheme,
+      routerConfig: router,
+      debugShowCheckedModeBanner: false,
+    );
+  }
+}
+```
+
+---
+
+## 3. Folder Structure (Clean Architecture)
+
+```
+lib/
+├── main.dart
+├── app/
+│   └── app.dart
+│
+├── core/
+│   ├── constants/
+│   │   ├── app_colors.dart
+│   │   ├── app_strings.dart
+│   │   └── app_constants.dart
+│   │
+│   ├── theme/
+│   │   ├── app_theme.dart
+│   │   ├── text_styles.dart
+│   │   └── app_decorations.dart
+│   │
+│   ├── router/
+│   │   ├── app_router.dart
+│   │   └── routes.dart
+│   │
+│   ├── utils/
+│   │   ├── formatters.dart
+│   │   ├── validators.dart
+│   │   └── extensions.dart
+│   │
+│   └── widgets/
+│       ├── loading_shimmer.dart
+│       ├── error_widget.dart
+│       ├── empty_state_widget.dart
+│       └── confirmation_dialog.dart
+│
+├── features/
+│   ├── auth/
+│   │   ├── data/
+│   │   │   ├── auth_repository.dart
+│   │   │   └── auth_repository_impl.dart
+│   │   │
+│   │   ├── domain/
+│   │   │   ├── user_model.dart
+│   │   │   └── auth_state.dart
+│   │   │
+│   │   ├── presentation/
+│   │   │   ├── providers/
+│   │   │   │   └── auth_provider.dart
+│   │   │   │
+│   │   │   ├── screens/
+│   │   │   │   ├── login_screen.dart
+│   │   │   │   ├── register_screen.dart
+│   │   │   │   └── forgot_password_screen.dart
+│   │   │   │
+│   │   │   └── widgets/
+│   │   │       ├── auth_text_field.dart
+│   │   │       └── social_login_button.dart
+│   │   │
+│   │   └── auth_feature.dart
+│   │
+│   ├── home/
+│   │   ├── presentation/
+│   │   │   ├── screens/
+│   │   │   │   └── home_screen.dart
+│   │   │   └── widgets/
+│   │   │       ├── stats_card.dart
+│   │   │       └── quick_action_grid.dart
+│   │   │
+│   │   └── home_feature.dart
+│   │
+│   ├── claims/
+│   │   ├── data/
+│   │   │   ├── claims_repository.dart
+│   │   │   ├── claims_repository_impl.dart
+│   │   │   └── claims_local_data_source.dart
+│   │   │
+│   │   ├── domain/
+│   │   │   ├── claim_model.dart
+│   │   │   ├── claim_document_model.dart
+│   │   │   └── claim_type_enum.dart
+│   │   │
+│   │   ├── presentation/
+│   │   │   ├── providers/
+│   │   │   │   └── claims_provider.dart
+│   │   │   │
+│   │   │   ├── screens/
+│   │   │   │   ├── claims_list_screen.dart
+│   │   │   │   ├── claim_detail_screen.dart
+│   │   │   │   └── submit_claim_screen.dart
+│   │   │   │
+│   │   │   └── widgets/
+│   │   │       ├── claim_card.dart
+│   │   │       ├── claim_status_badge.dart
+│   │   │       ├── claim_document_tile.dart
+│   │   │       ├── skeleton_claim_card.dart
+│   │   │       └── document_upload_widget.dart
+│   │   │
+│   │   └── claims_feature.dart
+│   │
+│   └── profile/
+│       ├── data/
+│       │   └── profile_repository.dart
+│       │
+│       ├── presentation/
+│       │   ├── screens/
+│       │   │   └── profile_screen.dart
+│       │   │
+│       │   └── widgets/
+│       │       ├── profile_header.dart
+│       │       └── settings_tile.dart
+│       │
+│       └── profile_feature.dart
+│
+└── shared/
+    ├── models/
+    │   └── api_response.dart
+    │
+    └── services/
+        └── storage_service.dart
+```
+
+---
+
+## 4. Core Feature Implementation
+
+### 4.1 Authentication Service
+
+**Domain Model (`lib/features/auth/domain/user_model.dart`):**
+```dart
+class UserModel {
+  final String id;
+  final String email;
+  final String? fullName;
+  final String? membershipNumber;
+  final String? avatarUrl;
+  final DateTime createdAt;
+
+  UserModel({
+    required this.id,
+    required this.email,
+    this.fullName,
+    this.membershipNumber,
+    this.avatarUrl,
+    required this.createdAt,
+  });
+
+  factory UserModel.fromJson(Map<String, dynamic> json) {
+    return UserModel(
+      id: json['id'],
+      email: json['email'] ?? '',
+      fullName: json['full_name'],
+      membershipNumber: json['membership_number'],
+      avatarUrl: json['avatar_url'],
+      createdAt: DateTime.parse(json['created_at'] ?? DateTime.now().toIso8601String()),
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'email': email,
+      'full_name': fullName,
+      'membership_number': membershipNumber,
+      'avatar_url': avatarUrl,
+      'created_at': createdAt.toIso8601String(),
+    };
+  }
+}
+```
+
+**Repository (`lib/features/auth/data/auth_repository_impl.dart`):**
+```dart
+class AuthRepositoryImpl implements AuthRepository {
+  final SupabaseClient _supabase;
+  
+  AuthRepositoryImpl({required SupabaseClient supabase}) : _supabase = supabase;
+
+  @override
+  Future<UserModel?> signInWithEmail({
+    required String email,
+    required String password,
+  }) async {
+    try {
+      final response = await _supabase.auth.signInWithPassword(
+        email: email,
+        password: password,
+      );
+      
+      if (response.user != null) {
+        return await getCurrentUser(response.user!.id);
+      }
+      return null;
+    } catch (e) {
+      throw AuthException(e.toString());
+    }
+  }
+
+  @override
+  Future<UserModel?> signUpWithEmail({
+    required String email,
+    required String password,
+    required String fullName,
+    String? membershipNumber,
+  }) async {
+    try {
+      final response = await _supabase.auth.signUp(
+        email: email,
+        password: password,
+        data: {'full_name': fullName},
+      );
+      
+      if (response.user != null) {
+        // Update profile with membership number
+        await _supabase
+            .from('profiles')
+            .update({'membership_number': membershipNumber})
+            .eq('id', response.user!.id);
+            
+        return await getCurrentUser(response.user!.id);
+      }
+      return null;
+    } catch (e) {
+      throw AuthException(e.toString());
+    }
+  }
+
+  @override
+  Future<void> signOut() async {
+    await _supabase.auth.signOut();
+  }
+
+  @override
+  Future<UserModel?> getCurrentUser(String userId) async {
+    try {
+      final response = await _supabase
+          .from('profiles')
+          .select()
+          .eq('id', userId)
+          .single();
+          
+      final user = _supabase.auth.currentUser;
+      
+      return UserModel(
+        id: response['id'],
+        email: user?.email ?? '',
+        fullName: response['full_name'],
+        membershipNumber: response['membership_number'],
+        avatarUrl: response['avatar_url'],
+        createdAt: DateTime.parse(response['created_at']),
+      );
+    } catch (e) {
+      return null;
+    }
+  }
+
+  @override
+  Stream<UserModel?> get authStateChanges {
+    return _supabase.auth.onAuthStateChange.map((event) {
+      final user = event.session?.user;
+      if (user != null) {
+        return getCurrentUser(user.id);
+      }
+      return null;
+    }).asyncMap((userFuture) async => await userFuture);
+  }
+}
+```
+
+**Auth Provider (`lib/features/auth/presentation/providers/auth_provider.dart`):**
+```dart
+final authRepositoryProvider = Provider<AuthRepository>((ref) {
+  return AuthRepositoryImpl(supabase: Supabase.instance.client);
+});
+
+final authStateProvider = StreamProvider<UserModel?>((ref) {
+  final authRepository = ref.watch(authRepositoryProvider);
+  return authRepository.authStateChanges;
+});
+
+final authControllerProvider = StateNotifierProvider<AuthController, AsyncValue<UserModel?>>((ref) {
+  final authRepository = ref.watch(authRepositoryProvider);
+  return AuthController(authRepository: authRepository);
+});
+
+class AuthController extends StateNotifier<AsyncValue<UserModel?>> {
+  final AuthRepository _authRepository;
+
+  AuthController({required AuthRepository authRepository})
+      : _authRepository = authRepository,
+        super(const AsyncValue.loading()) {
+    _init();
+  }
+
+  Future<void> _init() async {
+    final user = await _authRepository.getCurrentUser(
+      Supabase.instance.client.auth.currentUser?.id ?? '',
+    );
+    state = AsyncValue.data(user);
+  }
+
+  Future<void> signIn(String email, String password) async {
+    state = const AsyncValue.loading();
+    try {
+      final user = await _authRepository.signInWithEmail(
+        email: email,
+        password: password,
+      );
+      state = AsyncValue.data(user);
+    } catch (e, st) {
+      state = AsyncValue.error(e, st);
+    }
+  }
+
+  Future<void> signUp({
+    required String email,
+    required String password,
+    required String fullName,
+    String? membershipNumber,
+  }) async {
+    state = const AsyncValue.loading();
+    try {
+      final user = await _authRepository.signUpWithEmail(
+        email: email,
+        password: password,
+        fullName: fullName,
+        membershipNumber: membershipNumber,
+      );
+      state = AsyncValue.data(user);
+    } catch (e, st) {
+      state = AsyncValue.error(e, st);
+    }
+  }
+
+  Future<void> signOut() async {
+    await _authRepository.signOut();
+    state = const AsyncValue.data(null);
+  }
+}
+```
+
+---
+
+### 4.2 Claims Management
+
+**Domain Model (`lib/features/claims/domain/claim_model.dart`):**
+```dart
+enum ClaimStatus {
+  pending,
+  underReview,
+  approved,
+  rejected,
+  paid;
+
+  String get displayName {
+    switch (this) {
+      case ClaimStatus.pending:
+        return 'Pending';
+      case ClaimStatus.underReview:
+        return 'Under Review';
+      case ClaimStatus.approved:
+        return 'Approved';
+      case ClaimStatus.rejected:
+        return 'Rejected';
+      case ClaimStatus.paid:
+        return 'Paid';
+    }
+  }
+
+  Color get color {
+    switch (this) {
+      case ClaimStatus.pending:
+        return Colors.orange;
+      case ClaimStatus.underReview:
+        return Colors.blue;
+      case ClaimStatus.approved:
+        return Colors.green;
+      case ClaimStatus.rejected:
+        return Colors.red;
+      case ClaimStatus.paid:
+        return Colors.purple;
+    }
+  }
+}
+
+enum ClaimType {
+  gpVisit,
+  specialist,
+  medicine,
+  pathology,
+  hospital,
+  dental;
+
+  String get displayName {
+    switch (this) {
+      case ClaimType.gpVisit:
+        return 'GP Visit';
+      case ClaimType.specialist:
+        return 'Specialist';
+      case ClaimType.medicine:
+        return 'Medicine';
+      case ClaimType.pathology:
+        return 'Pathology';
+      case ClaimType.hospital:
+        return 'Hospital';
+      case ClaimType.dental:
+        return 'Dental';
+    }
+  }
+}
+
+class ClaimModel {
+  final String id;
+  final String userId;
+  final ClaimType claimType;
+  final double amount;
+  final DateTime serviceDate;
+  final String? description;
+  final ClaimStatus status;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+  final List<ClaimDocumentModel>? documents;
+
+  ClaimModel({
+    required this.id,
+    required this.userId,
+    required this.claimType,
+    required this.amount,
+    required this.serviceDate,
+    this.description,
+    required this.status,
+    required this.createdAt,
+    required this.updatedAt,
+    this.documents,
+  });
+
+  factory ClaimModel.fromJson(Map<String, dynamic> json) {
+    return ClaimModel(
+      id: json['id'],
+      userId: json['user_id'],
+      claimType: ClaimType.values.firstWhere(
+        (e) => e.toString().split('.').last.toLowerCase() == 
+               json['claim_type'].toString().toLowerCase().replaceAll(' ', ''),
+        orElse: () => ClaimType.gpVisit,
+      ),
+      amount: (json['amount'] as num).toDouble(),
+      serviceDate: DateTime.parse(json['service_date']),
+      description: json['description'],
+      status: ClaimStatus.values.firstWhere(
+        (e) => e.displayName.toLowerCase() == json['status'].toString().toLowerCase(),
+        orElse: () => ClaimStatus.pending,
+      ),
+      createdAt: DateTime.parse(json['created_at']),
+      updatedAt: DateTime.parse(json['updated_at']),
+      documents: json['claim_documents'] != null
+          ? (json['claim_documents'] as List)
+              .map((doc) => ClaimDocumentModel.fromJson(doc))
+              .toList()
+          : null,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'user_id': userId,
+      'claim_type': claimType.displayName,
+      'amount': amount,
+      'service_date': serviceDate.toIso8601String(),
+      'description': description,
+      'status': status.displayName,
+    };
+  }
+}
+```
+
+**Claims Repository (`lib/features/claims/data/claims_repository_impl.dart`):**
+```dart
+class ClaimsRepositoryImpl implements ClaimsRepository {
+  final SupabaseClient _supabase;
+  
+  ClaimsRepositoryImpl({required SupabaseClient supabase}) : _supabase = supabase;
+
+  @override
+  Stream<List<ClaimModel>> getUserClaims(String userId) {
+    return _supabase
+        .from('claims')
+        .stream(primaryKey: ['id'])
+        .eq('user_id', userId)
+        .order('created_at', ascending: false)
+        .map((data) => data.map((json) => ClaimModel.fromJson(json)).toList());
+  }
+
+  @override
+  Future<ClaimModel> getClaimById(String claimId) async {
+    final response = await _supabase
+        .from('claims')
+        .select('*, claim_documents(*)')
+        .eq('id', claimId)
+        .single();
+        
+    return ClaimModel.fromJson(response);
+  }
+
+  @override
+  Future<ClaimModel> submitClaim({
+    required String userId,
+    required ClaimType claimType,
+    required double amount,
+    required DateTime serviceDate,
+    String? description,
+    List<String>? documentPaths,
+  }) async {
+    final claimData = {
+      'user_id': userId,
+      'claim_type': claimType.displayName,
+      'amount': amount,
+      'service_date': serviceDate.toIso8601String(),
+      'description': description,
+    };
+    
+    final response = await _supabase
+        .from('claims')
+        .insert(claimData)
+        .select()
+        .single();
+        
+    final claim = ClaimModel.fromJson(response);
+    
+    // Add document references if any
+    if (documentPaths != null && documentPaths.isNotEmpty) {
+      for (final path in documentPaths) {
+        await _supabase.from('claim_documents').insert({
+          'claim_id': claim.id,
+          'file_name': path.split('/').last,
+          'file_path': path,
+          'file_type': _getFileType(path),
+        });
+      }
+    }
+    
+    return claim;
+  }
+
+  @override
+  Future<String> uploadClaimDocument({
+    required String userId,
+    required String claimId,
+    required File file,
+    required String folder,
+  }) async {
+    final fileName = '${userId}_${DateTime.now().millisecondsSinceEpoch}_${file.path.split('/').last}';
+    final filePath = '$folder/$fileName';
+    
+    await _supabase.storage
+        .from('claim-documents')
+        .upload(filePath, file);
+        
+    return filePath;
+  }
+
+  String _getFileType(String path) {
+    final extension = path.split('.').last.toLowerCase();
+    if (['jpg', 'jpeg', 'png', 'gif'].contains(extension)) {
+      return 'image';
+    } else if (extension == 'pdf') {
+      return 'pdf';
+    }
+    return 'document';
+  }
+}
+```
+
+**Claims Provider (`lib/features/claims/presentation/providers/claims_provider.dart`):**
+```dart
+final claimsRepositoryProvider = Provider<ClaimsRepository>((ref) {
+  return ClaimsRepositoryImpl(supabase: Supabase.instance.client);
+});
+
+final userClaimsProvider = StreamProvider.family<List<ClaimModel>, String>((ref, userId) {
+  final claimsRepository = ref.watch(claimsRepositoryProvider);
+  return claimsRepository.getUserClaims(userId);
+});
+
+final claimDetailProvider = FutureProvider.family<ClaimModel, String>((ref, claimId) async {
+  final claimsRepository = ref.watch(claimsRepositoryProvider);
+  return await claimsRepository.getClaimById(claimId);
+});
+
+final claimsControllerProvider = StateNotifierProvider<ClaimsController, AsyncValue<void>>((ref) {
+  final claimsRepository = ref.watch(claimsRepositoryProvider);
+  return ClaimsController(claimsRepository: claimsRepository);
+});
+
+class ClaimsController extends StateNotifier<AsyncValue<void>> {
+  final ClaimsRepository _claimsRepository;
+
+  ClaimsController({required ClaimsRepository claimsRepository})
+      : _claimsRepository = claimsRepository,
+        super(const AsyncValue.data(null));
+
+  Future<ClaimModel?> submitClaim({
+    required String userId,
+    required ClaimType claimType,
+    required double amount,
+    required DateTime serviceDate,
+    String? description,
+    List<File>? documents,
+  }) async {
+    state = const AsyncValue.loading();
+    try {
+      List<String> documentPaths = [];
+      
+      if (documents != null && documents.isNotEmpty) {
+        for (final file in documents) {
+          final path = await _claimsRepository.uploadClaimDocument(
+            userId: userId,
+            claimId: 'temp',
+            file: file,
+            folder: 'receipts',
+          );
+          documentPaths.add(path);
+        }
+      }
+      
+      final claim = await _claimsRepository.submitClaim(
+        userId: userId,
+        claimType: claimType,
+        amount: amount,
+        serviceDate: serviceDate,
+        description: description,
+        documentPaths: documentPaths,
+      );
+      
+      state = const AsyncValue.data(null);
+      return claim;
+    } catch (e, st) {
+      state = AsyncValue.error(e, st);
+      return null;
+    }
+  }
+}
+```
+
+---
+
+### 4.3 UI Components
+
+**Skeleton Loading Card (`lib/core/widgets/loading_shimmer.dart`):**
+```dart
+import 'package:flutter/material.dart';
+import 'package:shimmer/shimmer.dart';
+
+class SkeletonClaimCard extends StatelessWidget {
+  const SkeletonClaimCard({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Shimmer.fromColors(
+      baseColor: Colors.grey[300]!,
+      highlightColor: Colors.grey[100]!,
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Container(
+                  width: 100,
+                  height: 20,
+                  color: Colors.white,
+                ),
+                Container(
+                  width: 80,
+                  height: 24,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Container(
+              width: 150,
+              height: 24,
+              color: Colors.white,
+            ),
+            const SizedBox(height: 8),
+            Container(
+              width: 200,
+              height: 16,
+              color: Colors.white,
+            ),
+            const SizedBox(height: 12),
+            Divider(color: Colors.grey[200]),
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Container(
+                  width: 120,
+                  height: 16,
+                  color: Colors.white,
+                ),
+                Container(
+                  width: 40,
+                  height: 16,
+                  color: Colors.white,
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+```
+
+**Claim Card Widget (`lib/features/claims/presentation/widgets/claim_card.dart`):**
+```dart
+class ClaimCard extends StatelessWidget {
+  final ClaimModel claim;
+  final VoidCallback onTap;
+
+  const ClaimCard({
+    super.key,
+    required this.claim,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Theme.of(context).cardColor,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.05),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  claim.claimType.displayName,
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                ClaimStatusBadge(status: claim.status),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '\$${claim.amount.toStringAsFixed(2)}',
+              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                fontWeight: FontWeight.bold,
+                color: Theme.of(context).primaryColor,
+              ),
+            ),
+            const SizedBox(height: 8),
+            if (claim.description != null)
+              Text(
+                claim.description!,
+                style: Theme.of(context).textTheme.bodyMedium,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            const SizedBox(height: 12),
+            Divider(color: Colors.grey.withOpacity(0.2)),
+            const SizedBox(height: 8),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      Icons.calendar_today_outlined,
+                      size: 14,
+                      color: Colors.grey[600],
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      DateFormat('MMM dd, yyyy').format(claim.serviceDate),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey[600],
+                      ),
+                    ),
+                  ],
+                ),
+                if (claim.documents != null && claim.documents!.isNotEmpty)
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.attach_file,
+                        size: 14,
+                        color: Colors.grey[600],
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        '${claim.documents!.length} document(s)',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                    ],
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+```
+
+---
+
+### 4.4 Main Screens
+
+**Login Screen (`lib/features/auth/presentation/screens/login_screen.dart`):**
+```dart
+class LoginScreen extends ConsumerStatefulWidget {
+  const LoginScreen({super.key});
+
+  @override
+  ConsumerState<LoginScreen> createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends ConsumerState<LoginScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
+  bool _isPasswordVisible = false;
+  bool _isLoading = false;
+
+  @override
+  void dispose() {
+    _emailController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _handleLogin() async {
+    if (!_formKey.currentState!.validate()) return;
+    
+    setState(() => _isLoading = true);
+    
+    try {
+      await ref.read(authControllerProvider.notifier).signIn(
+        _emailController.text.trim(),
+        _passwordController.text,
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Login failed: ${e.toString()}'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const SizedBox(height: 60),
+              // Logo
+              Container(
+                width: 80,
+                height: 80,
+                decoration: BoxDecoration(
+                  color: Theme.of(context).primaryColor,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: const Icon(
+                  Icons.health_and_safety,
+                  color: Colors.white,
+                  size: 40,
+                ),
+              ),
+              const SizedBox(height: 32),
+              Text(
+                'Welcome Back',
+                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Sign in to manage your medical claims',
+                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                  color: Colors.grey[600],
+                ),
+              ),
+              const SizedBox(height: 32),
+              Form(
+                key: _formKey,
+                child: Column(
+                  children: [
+                    TextFormField(
+                      controller: _emailController,
+                      keyboardType: TextInputType.emailAddress,
+                      decoration: InputDecoration(
+                        labelText: 'Email',
+                        prefixIcon: const Icon(Icons.email_outlined),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      validator: (value) {
+                        if (value == null || value.isEmpty) {
+                          return 'Please enter your email';
+                        }
+                        if (!value.contains('@')) {
+                          return 'Please enter a valid email';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    TextFormField(
+                      controller: _passwordController,
+                      obscureText: !_isPasswordVisible,
+                      decoration: InputDecoration(
+                        labelText: 'Password',
+                        prefixIcon: const Icon(Icons.lock_outline),
+                        suffixIcon: IconButton(
+                          icon: Icon(
+                            _isPasswordVisible
+                                ? Icons.visibility_off
+                                : Icons.visibility,
+                          ),
+                          onPressed: () {
+                            setState(() {
+                              _isPasswordVisible = !_isPasswordVisible;
+                            });
+                          },
+                        ),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      validator: (value) {
+                        if (value == null || value.isEmpty) {
+                          return 'Please enter your password';
+                        }
+                        if (value.length < 6) {
+                          return 'Password must be at least 6 characters';
+                        }
+                        return null;
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 16),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: () {
+                    // Navigate to forgot password
+                  },
+                  child: Text(
+                    'Forgot Password?',
+                    style: TextStyle(
+                      color: Theme.of(context).primaryColor,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: _isLoading ? null : _handleLogin,
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: _isLoading
+                    ? const SizedBox(
+                        height: 20,
+                        width: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Text(
+                        'Sign In',
+                        style: TextStyle(fontSize: 16),
+                      ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    "Don't have an account? ",
+                    style: TextStyle(color: Colors.grey[600]),
+                  ),
+                  TextButton(
+                    onPressed: () {
+                      // Navigate to register screen
+                    },
+                    child: Text(
+                      'Sign Up',
+                      style: TextStyle(
+                        color: Theme.of(context).primaryColor,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+```
+
+**Claims List Screen (`lib/features/claims/presentation/screens/claims_list_screen.dart`):**
+```dart
+class ClaimsListScreen extends ConsumerWidget {
+  const ClaimsListScreen({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final user = ref.watch(authStateProvider).value;
+    final claimsAsync = ref.watch(userClaimsProvider(user?.id ?? ''));
+    
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('My Claims'),
+        centerTitle: true,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.filter_list),
+            onPressed: () {
+              // Show filter options
+            },
+          ),
+        ],
+      ),
+      body: claimsAsync.when(
+        data: (claims) {
+          if (claims.isEmpty) {
+            return const EmptyStateWidget(
+              icon: Icons.receipt_long_outlined,
+              title: 'No Claims Yet',
+              message: 'Submit your first medical claim to get started',
+            );
+          }
+          
+          return RefreshIndicator(
+            onRefresh: () async {
+              ref.invalidate(userClaimsProvider);
+            },
+            child: ListView.builder(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              itemCount: claims.length,
+              itemBuilder: (context, index) {
+                final claim = claims[index];
+                return ClaimCard(
+                  claim: claim,
+                  onTap: () {
+                    // Navigate to claim detail
+                  },
+                );
+              },
+            ),
+          );
+        },
+        loading: () => ListView.builder(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          itemCount: 5,
+          itemBuilder: (context, index) => const SkeletonClaimCard(),
+        ),
+        error: (error, stack) => Center(
+          child: ErrorWidgetDisplay(
+            message: 'Failed to load claims: $error',
+            onRetry: () {
+              ref.invalidate(userClaimsProvider);
+            },
+          ),
+        ),
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () {
+          // Navigate to submit claim screen
+        },
+        icon: const Icon(Icons.add),
+        label: const Text('New Claim'),
+      ),
+    );
+  }
+}
+```
+
+---
+
+## 5. Implementation Checklist
+
+### Phase 1: Project Setup
+- [ ] Initialize Flutter project with dependencies
+- [ ] Set up folder structure
+- [ ] Configure Supabase client
+- [ ] Set up routing with GoRouter
+
+### Phase 2: Authentication
+- [ ] Implement AuthRepository
+- [ ] Create Login Screen UI
+- [ ] Create Register Screen UI
+- [ ] Set up auth providers (Riverpod)
+- [ ] Implement session persistence
+
+### Phase 3: Claims Management
+- [ ] Implement ClaimsRepository
+- [ ] Create Claim Model
+- [ ] Build Claims List Screen
+- [ ] Build Claim Detail Screen
+- [ ] Create Submit Claim Form Screen
+- [ ] Implement real-time claims updates
+
+### Phase 4: Document Upload
+- [ ] Integrate ImagePicker and FilePicker
+- [ ] Implement Supabase Storage upload
+- [ ] Create Document Upload Widget
+- [ ] Display uploaded documents in claim detail
+
+### Phase 5: Profile & Settings
+- [ ] Build Profile Screen
+- [ ] Implement profile update functionality
+- [ ] Add settings and preferences
+- [ ] Implement logout functionality
+
+### Phase 6: Polish
+- [ ] Add skeleton loading animations
+- [ ] Implement error handling
+- [ ] Add empty states
+- [ ] Create confirmation dialogs
+- [ ] Add pull-to-refresh
+- [ ] Implement dark mode support
+
+---
+
+## 6. Testing Credentials
+
+For development testing, use these credentials or create new ones:
+
+```
+Test User Email: test@smarthealth.com
+Test User Password: Test123!
+Test Membership Number: MEM12345
+```
+
+---
+
+## 7. Additional Notes
+
+### Real-time Subscriptions
+The claims list automatically updates when claim statuses change. This is enabled by using `.stream()` in the repository instead of `.select()`.
+
+### Document Storage Path Convention
+```
+Format: {userId}_{timestamp}_{originalFileName}
+Example: b3c1766e-5624-44d1-9f83-382340cf4726_1712900000_receipt.pdf
+Location: claim-documents/receipts/{filename}
+```
+
+### Error Handling
+All repository methods should throw custom exceptions that the UI layer can handle gracefully. Use `AsyncValue` from Riverpod to manage loading/error states.
+
+### UI/UX Guidelines
+- Use consistent spacing (multiples of 8)
+- Card-based design with subtle shadows
+- Skeleton loaders for async operations
+- Pull-to-refresh for manual data sync
+- Confirmation dialogs for destructive actions
+- Smooth transitions between screens
+
+---
+
+This documentation provides everything needed to build the SmartHealth app. The architecture is scalable, maintainable, and follows Flutter best practices with clean separation of concerns.
+
+For any questions during development, refer to:
+- [Supabase Flutter Documentation](https://supabase.com/docs/reference/dart/introduction)
+- [Riverpod Documentation](https://riverpod.dev)
+- [Flutter Documentation](https://flutter.dev/docs)
