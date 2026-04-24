@@ -41,3 +41,13 @@ SmartHealth allows users to create an account, submit medical claims with suppor
    ```bash
    git clone https://github.com/gifthlahla/smarthealth-app.git
    cd smarthealth-app
+
+### Login Credentials
+
+1. **Username**
+   ```bash
+   gift@gmail.com
+
+2. **Password**
+   ```bash
+   gift1234
