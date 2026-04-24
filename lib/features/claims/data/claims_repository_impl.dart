@@ -19,6 +19,23 @@ class ClaimsRepositoryImpl implements ClaimsRepository {
   }
 
   @override
+  Future<List<ClaimModel>> fetchUserClaims(String userId) async {
+    try {
+      final response = await _supabase
+          .from('claims')
+          .select()
+          .eq('user_id', userId)
+          .order('created_at', ascending: false);
+
+      return (response as List)
+          .map((json) => ClaimModel.fromJson(json))
+          .toList();
+    } catch (e) {
+      throw Exception('Failed to fetch claims: $e');
+    }
+  }
+
+  @override
   Future<ClaimModel> getClaimById(String claimId) async {
     try {
       final response = await _supabase

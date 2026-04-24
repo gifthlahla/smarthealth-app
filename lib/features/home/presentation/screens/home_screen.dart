@@ -9,16 +9,32 @@ import 'package:smarthealth/features/claims/domain/claim_model.dart';
 import 'package:smarthealth/features/claims/presentation/providers/claims_provider.dart';
 import 'package:smarthealth/features/claims/presentation/widgets/claim_card.dart';
 
-class HomeScreen extends ConsumerWidget {
+class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends ConsumerState<HomeScreen> {
+  @override
+  void initState() {
+    super.initState();
+    // Refresh claims data every time the home screen is initialized
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final userId = ref.read(authControllerProvider).value?.id ?? '';
+      if (userId.isNotEmpty) {
+        ref.invalidate(userClaimsProvider(userId));
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final authState = ref.watch(authControllerProvider);
     final user = authState.value;
     final userId = user?.id ?? '';
     final claimsAsync = ref.watch(userClaimsProvider(userId));
-
 
     return Scaffold(
       body: CustomScrollView(
@@ -26,9 +42,7 @@ class HomeScreen extends ConsumerWidget {
           // Hero header
           SliverToBoxAdapter(
             child: Container(
-              decoration: const BoxDecoration(
-                gradient: AppColors.heroGradient,
-              ),
+              decoration: const BoxDecoration(gradient: AppColors.heroGradient),
               child: SafeArea(
                 bottom: false,
                 child: Padding(
@@ -92,7 +106,7 @@ class HomeScreen extends ConsumerWidget {
                       claimsAsync.when(
                         data: (claims) => _buildStatsRow(context, claims),
                         loading: () => _buildStatsRowLoading(),
-                        error: (_, __) => _buildStatsRow(context, []),
+                        error: (_, _) => _buildStatsRow(context, []),
                       ),
                     ],
                   ),
@@ -206,16 +220,13 @@ class HomeScreen extends ConsumerWidget {
 
               final recentClaims = claims.take(5).toList();
               return SliverList(
-                delegate: SliverChildBuilderDelegate(
-                  (context, index) {
-                    return ClaimCard(
-                      claim: recentClaims[index],
-                      onTap: () =>
-                          context.push('/claim/${recentClaims[index].id}'),
-                    );
-                  },
-                  childCount: recentClaims.length,
-                ),
+                delegate: SliverChildBuilderDelegate((context, index) {
+                  return ClaimCard(
+                    claim: recentClaims[index],
+                    onTap: () =>
+                        context.push('/claim/${recentClaims[index].id}'),
+                  );
+                }, childCount: recentClaims.length),
               );
             },
             loading: () => SliverList(
@@ -262,7 +273,10 @@ class HomeScreen extends ConsumerWidget {
   Widget _buildStatsRow(BuildContext context, List<ClaimModel> claims) {
     final pending = claims.where((c) => c.status == ClaimStatus.pending).length;
     final totalAmount = claims
-        .where((c) => c.status == ClaimStatus.approved || c.status == ClaimStatus.paid)
+        .where(
+          (c) =>
+              c.status == ClaimStatus.approved || c.status == ClaimStatus.paid,
+        )
         .fold<double>(0, (sum, c) => sum + c.amount);
 
     return Row(
@@ -326,9 +340,7 @@ class _StatChip extends StatelessWidget {
         decoration: BoxDecoration(
           color: Colors.white.withOpacity(0.15),
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: Colors.white.withOpacity(0.1),
-          ),
+          border: Border.all(color: Colors.white.withOpacity(0.1)),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -407,9 +419,11 @@ class _QuickActionCard extends StatelessWidget {
             Text(
               label,
               style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    fontSize: 12,
-                    color: isDark ? AppColors.darkTextPrimary : AppColors.textPrimary,
-                  ),
+                fontSize: 12,
+                color: isDark
+                    ? AppColors.darkTextPrimary
+                    : AppColors.textPrimary,
+              ),
               textAlign: TextAlign.center,
             ),
           ],

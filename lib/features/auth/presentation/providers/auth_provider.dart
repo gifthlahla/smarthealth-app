@@ -19,16 +19,16 @@ final authStateProvider = StreamProvider<UserModel?>((ref) {
 
 final authControllerProvider =
     StateNotifierProvider<AuthController, AsyncValue<UserModel?>>((ref) {
-  final authRepository = ref.watch(authRepositoryProvider);
-  return AuthController(authRepository: authRepository);
-});
+      final authRepository = ref.watch(authRepositoryProvider);
+      return AuthController(authRepository: authRepository);
+    });
 
 class AuthController extends StateNotifier<AsyncValue<UserModel?>> {
   final AuthRepository _authRepository;
 
   AuthController({required AuthRepository authRepository})
-      : _authRepository = authRepository,
-        super(const AsyncValue.loading()) {
+    : _authRepository = authRepository,
+      super(const AsyncValue.loading()) {
     _init();
   }
 
@@ -41,7 +41,7 @@ class AuthController extends StateNotifier<AsyncValue<UserModel?>> {
       } else {
         state = const AsyncValue.data(null);
       }
-    } catch (e, st) {
+    } catch (e) {
       state = const AsyncValue.data(null);
     }
   }
@@ -98,7 +98,7 @@ class AuthController extends StateNotifier<AsyncValue<UserModel?>> {
       // Refresh user data
       final updatedUser = await _authRepository.getCurrentUser(userId);
       state = AsyncValue.data(updatedUser);
-    } catch (e, st) {
+    } catch (e) {
       // Don't change the auth state for profile update errors, just rethrow
       rethrow;
     }

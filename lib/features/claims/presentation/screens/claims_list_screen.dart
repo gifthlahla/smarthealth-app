@@ -40,6 +40,8 @@ class ClaimsListScreen extends ConsumerWidget {
             color: AppColors.primary,
             onRefresh: () async {
               ref.invalidate(userClaimsProvider(userId));
+              // Wait for the new data to load
+              await ref.read(userClaimsProvider(userId).future);
             },
             child: ListView.builder(
               padding: const EdgeInsets.only(top: 8, bottom: 100),

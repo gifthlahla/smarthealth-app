@@ -12,24 +12,64 @@ import 'package:smarthealth/features/claims/presentation/screens/submit_claim_sc
 import 'package:smarthealth/features/profile/presentation/screens/profile_screen.dart';
 import 'package:smarthealth/core/constants/app_colors.dart';
 
+/// A ChangeNotifier that bridges Riverpod auth state to GoRouter's
+/// refreshListenable. This way GoRouter is created ONCE and only
+/// re-evaluates its redirect when auth state actually changes.
+class AuthNotifier extends ChangeNotifier {
+  final Ref _ref;
+  bool _isLoggedIn = false;
+  bool _isLoading = true;
+
+  bool get isLoggedIn => _isLoggedIn;
+  bool get isLoading => _isLoading;
+
+  AuthNotifier(this._ref) {
+    // Listen to auth state changes and notify GoRouter
+    _ref.listen<AsyncValue>(authControllerProvider, (prev, next) {
+      final wasLoggedIn = _isLoggedIn;
+      final wasLoading = _isLoading;
+
+      _isLoading = next.isLoading;
+      _isLoggedIn = !next.isLoading && next.value != null;
+
+      // Only notify if something actually changed
+      if (wasLoggedIn != _isLoggedIn || wasLoading != _isLoading) {
+        notifyListeners();
+      }
+    });
+
+    // Set initial state from current auth
+    final current = _ref.read(authControllerProvider);
+    _isLoading = current.isLoading;
+    _isLoggedIn = !current.isLoading && current.value != null;
+  }
+}
+
+final _authNotifierProvider = Provider<AuthNotifier>((ref) {
+  return AuthNotifier(ref);
+});
+
 final appRouterProvider = Provider<GoRouter>((ref) {
-  final authState = ref.watch(authControllerProvider);
+  // Read once — the GoRouter is only created once
+  final authNotifier = ref.watch(_authNotifierProvider);
 
   return GoRouter(
     initialLocation: '/login',
+    refreshListenable: authNotifier, // Re-evaluates redirect on auth changes
     redirect: (context, state) {
-      final isLoggedIn = authState.value != null;
+      final isLoggedIn = authNotifier.isLoggedIn;
+      final isLoading = authNotifier.isLoading;
       final isAuthRoute = state.matchedLocation == '/login' ||
           state.matchedLocation == '/register' ||
           state.matchedLocation == '/forgot-password';
 
-      // Still loading auth state
-      if (authState.isLoading) return null;
+      // Still loading — don't redirect, stay where you are
+      if (isLoading) return null;
 
-      // Not logged in, force to auth routes
+      // Not logged in → go to login
       if (!isLoggedIn && !isAuthRoute) return '/login';
 
-      // Logged in, redirect away from auth routes
+      // Logged in and on an auth page → go to home
       if (isLoggedIn && isAuthRoute) return '/home';
 
       return null;

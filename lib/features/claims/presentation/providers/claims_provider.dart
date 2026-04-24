@@ -9,10 +9,13 @@ final claimsRepositoryProvider = Provider<ClaimsRepository>((ref) {
   return ClaimsRepositoryImpl(supabase: Supabase.instance.client);
 });
 
+/// Uses a direct DB query (not stream) so data is always fresh.
+/// Invalidate this provider to refetch from the database.
 final userClaimsProvider =
-    StreamProvider.family<List<ClaimModel>, String>((ref, userId) {
+    FutureProvider.family<List<ClaimModel>, String>((ref, userId) async {
+  if (userId.isEmpty) return [];
   final claimsRepository = ref.watch(claimsRepositoryProvider);
-  return claimsRepository.getUserClaims(userId);
+  return claimsRepository.fetchUserClaims(userId);
 });
 
 final claimDetailProvider =
@@ -24,14 +27,16 @@ final claimDetailProvider =
 final claimsControllerProvider =
     StateNotifierProvider<ClaimsController, AsyncValue<void>>((ref) {
   final claimsRepository = ref.watch(claimsRepositoryProvider);
-  return ClaimsController(claimsRepository: claimsRepository);
+  return ClaimsController(claimsRepository: claimsRepository, ref: ref);
 });
 
 class ClaimsController extends StateNotifier<AsyncValue<void>> {
   final ClaimsRepository _claimsRepository;
+  final Ref _ref;
 
-  ClaimsController({required ClaimsRepository claimsRepository})
+  ClaimsController({required ClaimsRepository claimsRepository, required Ref ref})
       : _claimsRepository = claimsRepository,
+        _ref = ref,
         super(const AsyncValue.data(null));
 
   Future<ClaimModel?> submitClaim({
@@ -68,6 +73,10 @@ class ClaimsController extends StateNotifier<AsyncValue<void>> {
       );
 
       state = const AsyncValue.data(null);
+
+      // Force refresh the claims list so it updates immediately
+      _ref.invalidate(userClaimsProvider(userId));
+
       return claim;
     } catch (e, st) {
       state = AsyncValue.error(e, st);
@@ -75,12 +84,21 @@ class ClaimsController extends StateNotifier<AsyncValue<void>> {
     }
   }
 
-  Future<bool> deleteClaim(String claimId) async {
+  Future<bool> deleteClaim(String claimId, String userId) async {
     try {
       await _claimsRepository.deleteClaim(claimId);
+
+      // Force refresh the claims list after deletion
+      _ref.invalidate(userClaimsProvider(userId));
+
       return true;
     } catch (e) {
       return false;
     }
+  }
+
+  /// Manually refresh claims for a user (e.g. on pull-to-refresh)
+  void refreshClaims(String userId) {
+    _ref.invalidate(userClaimsProvider(userId));
   }
 }

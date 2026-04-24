@@ -4,6 +4,8 @@ import 'package:smarthealth/features/claims/domain/claim_model.dart';
 abstract class ClaimsRepository {
   Stream<List<ClaimModel>> getUserClaims(String userId);
 
+  Future<List<ClaimModel>> fetchUserClaims(String userId);
+
   Future<ClaimModel> getClaimById(String claimId);
 
   Future<ClaimModel> submitClaim({
