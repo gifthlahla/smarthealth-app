@@ -6,19 +6,19 @@ SmartHealth allows users to create an account, submit medical claims with suppor
 
 ---
 
-## ✨ Features
+## Features
 
-- 🔐 Email/password authentication
-- 📄 Submit claims for GP, Specialist, Medicine, Pathology, Hospital, Dental
-- 📎 Upload documents to Supabase Storage
-- 🔔 Real‑time claim status updates (Pending → Under Review → Approved → Rejected → Paid)
-- 👤 User profile with membership number
-- 🌙 Dark mode support
-- 📱 Responsive design (iOS & Android)
+- Email/password authentication
+- Submit claims for GP, Specialist, Medicine, Pathology, Hospital, Dental
+- Upload documents to Supabase Storage
+- Real‑time claim status updates (Pending → Under Review → Approved → Rejected → Paid)
+- User profile with membership number
+- Dark mode support
+- Responsive design (iOS & Android)
 
 ---
 
-## 🛠️ Tech Stack
+## Tech Stack
 
 - **Frontend**: Flutter (Riverpod, GoRouter)
 - **Backend**: Supabase (PostgreSQL, Auth, Storage, Realtime)
@@ -27,7 +27,7 @@ SmartHealth allows users to create an account, submit medical claims with suppor
 
 ---
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Prerequisites
 
@@ -39,7 +39,7 @@ SmartHealth allows users to create an account, submit medical claims with suppor
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/gifthlahla/smarthealth-app.git
+   git clone https://github.com/gifthlahla/smart-health-app.git
    cd smarthealth-app
 
 ### Login Credentials
